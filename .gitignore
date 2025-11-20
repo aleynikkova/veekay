@@ -2,3 +2,6 @@ build-*/
 build/
 shaders/*.spv
 imgui.ini
+.DS_Store
+.vscode/
+compile_commands.json

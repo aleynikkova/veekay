@@ -27,6 +27,7 @@ struct Vector {
 struct Vertex {
 	Vector position;
 	// NOTE: You can add more attributes
+	Vector color;
 };
 
 // NOTE: These variable will be available to shaders through push constant uniform
@@ -49,11 +50,16 @@ VkPipeline pipeline;
 // NOTE: Declare buffers and other variables here
 VulkanBuffer vertex_buffer;
 VulkanBuffer index_buffer;
+uint32_t sphere_index_count;
 
 Vector model_position = {0.0f, 0.0f, 5.0f};
 float model_rotation;
 Vector model_color = {0.5f, 1.0f, 0.7f };
-bool model_spin = true;
+bool model_spin = false;
+float scale_factor = 1.0f;
+bool scale_animation = true;
+Vector camera_rotation = {0.0f, 0.0f, 0.0f};
+float camera_distance = 1.0f;
 
 Matrix identity() {
 	Matrix result{};
@@ -122,6 +128,16 @@ Matrix rotation(Vector axis, float angle) {
 	return result;
 }
 
+Matrix scale(Vector factors) {
+    Matrix result = identity();
+
+    result.m[0][0] = factors.x;
+    result.m[1][1] = factors.y;
+    result.m[2][2] = factors.z;
+
+    return result;
+}
+
 Matrix multiply(const Matrix& a, const Matrix& b) {
 	Matrix result{};
 
@@ -134,6 +150,59 @@ Matrix multiply(const Matrix& a, const Matrix& b) {
 	}
 
 	return result;
+}
+
+Matrix camera_view(Vector rotation, float distance) {
+    
+    float x = distance * sinf(rotation.y) * cosf(rotation.x);
+    float y = distance * sinf(rotation.x);
+    float z = distance * cosf(rotation.y) * cosf(rotation.x);
+
+    Vector camera_pos = {x, y, z};
+    Vector target_pos = {0.0f, 0.0f, 0.0f};
+    Vector up_dir = {0.0f, 1.0f, 0.0f};
+    
+
+    Vector forward = {
+        target_pos.x - camera_pos.x,
+        target_pos.y - camera_pos.y, 
+        target_pos.z - camera_pos.z
+    };
+    
+
+    float length = sqrt(forward.x*forward.x + forward.y*forward.y + forward.z*forward.z);
+    forward.x /= length;
+	forward.y /= length; 
+	forward.z /= length;
+    
+
+    Vector right = {
+        forward.y * up_dir.z - forward.z * up_dir.y,
+        forward.z * up_dir.x - forward.x * up_dir.z,
+        forward.x * up_dir.y - forward.y * up_dir.x
+    };
+	length = sqrt(right.x*right.x + right.y*right.y + right.z*right.z);
+    right.x /= length; 
+	right.y /= length; 
+	right.z /= length;
+    
+
+    Vector up = {
+        right.y * forward.z - right.z * forward.y,
+        right.z * forward.x - right.x * forward.z,
+        right.x * forward.y - right.y * forward.x
+    };
+    
+    Matrix view = identity();
+    view.m[0][0] = right.x; view.m[1][0] = right.y; view.m[2][0] = right.z;
+    view.m[0][1] = up.x;    view.m[1][1] = up.y;    view.m[2][1] = up.z;
+    view.m[0][2] = -forward.x; view.m[1][2] = -forward.y; view.m[2][2] = -forward.z;
+    
+    view.m[3][0] = - (right.x * camera_pos.x + right.y * camera_pos.y + right.z * camera_pos.z);
+    view.m[3][1] = - (up.x * camera_pos.x + up.y * camera_pos.y + up.z * camera_pos.z);
+    view.m[3][2] = - (-forward.x * camera_pos.x - forward.y * camera_pos.y - forward.z * camera_pos.z);
+    
+    return view;
 }
 
 // NOTE: Loads shader byte code from file
@@ -309,14 +378,14 @@ void initialize() {
 				.offset = offsetof(Vertex, position), // NOTE: Offset of "position" field in a Vertex struct
 			},
 			// NOTE: If you want more attributes per vertex, declare them here
-#if 0
+//#if 0
 			{
 				.location = 1, // NOTE: Second attribute
 				.binding = 0,
-				.format = VK_FORMAT_XXX,
-				.offset = offset(Vertex, your_attribute),
+				.format = VK_FORMAT_R32G32B32_SFLOAT,
+				.offset = offsetof(Vertex, color),
 			},
-#endif
+//#endif
 		};
 
 		// NOTE: Bring 
@@ -461,6 +530,7 @@ void initialize() {
 	//  |   `--,   |
 	//  |       \  |
 	// (v3)------(v2)
+	/*
 	Vertex vertices[] = {
 		{{-1.0f, -1.0f, 0.0f}},
 		{{1.0f, -1.0f, 0.0f}},
@@ -469,12 +539,54 @@ void initialize() {
 	};
 
 	uint32_t indices[] = { 0, 1, 2, 2, 3, 0 };
+	*/
+	const int sectors = 10;
+	const int stacks = 10;
+	const float radius = 1.0f;
 
-	vertex_buffer = createBuffer(sizeof(vertices), vertices,
-	                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+	std::vector<Vertex> vertices;
+	std::vector<uint32_t> indices;
 
-	index_buffer = createBuffer(sizeof(indices), indices,
-	                            VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+	for (int i = 0; i <= stacks; ++i) {
+		float lat = M_PI * (-0.5f + (float)i / stacks);
+		float y = radius * sin(lat);
+    
+		for (int j = 0; j <= sectors; ++j) {
+			float lon = 2 * M_PI * (float)j / sectors;
+			float x = radius * cos(lat) * cos(lon);
+			float z = radius * cos(lat) * sin(lon);
+			
+			Vector vertex_color = {
+				(x + 1.0f) * 0.5f,
+				(y + 1.0f) * 0.5f,  
+				(z + 1.0f) * 0.5f
+			};
+
+			vertices.push_back({{x, y, z}, vertex_color});
+		}
+	}
+
+	for (int i = 0; i < stacks; ++i) {
+		for (int j = 0; j < sectors; ++j) {
+			int first = i * (sectors + 1) + j;
+			int second = first + (sectors + 1);
+			
+			indices.push_back(first);
+			indices.push_back(second);
+			indices.push_back(first + 1);
+			
+			indices.push_back(second);
+			indices.push_back(second + 1);
+			indices.push_back(first + 1);
+		}
+	}
+	vertex_buffer = createBuffer(sizeof(Vertex) * vertices.size(), vertices.data(),
+                             VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+
+	index_buffer = createBuffer(sizeof(uint32_t) * indices.size(), indices.data(),
+                            VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+
+	sphere_index_count = static_cast<uint32_t>(indices.size());
 }
 
 void shutdown() {
@@ -493,14 +605,43 @@ void shutdown() {
 void update(double time) {
 	ImGui::Begin("Controls:");
 	ImGui::InputFloat3("Translation", reinterpret_cast<float*>(&model_position));
-	ImGui::SliderFloat("Rotation", &model_rotation, 0.0f, 2.0f * M_PI);
-	ImGui::Checkbox("Spin?", &model_spin);
+	//ImGui::SliderFloat("Rotation", &model_rotation, 0.0f, 2.0f * M_PI);
+	//ImGui::Checkbox("Spin?", &model_spin);
 	// TODO: Your GUI stuff here
+	ImGui::SliderFloat("Scale", &scale_factor, 0.1f, 2.0f);
+	ImGui::Checkbox("Pulse?", &scale_animation);
+
+	ImGui::Text("Camera View:");
+
+	if (ImGui::Button("Front")) {
+    camera_rotation = {0.0f, 0.0f, 0.0f};
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Left")) {
+		camera_rotation = {0.0f, -M_PI/2, 0.0f};
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Right")) {
+		camera_rotation = {0.0f, M_PI/2, 0.0f};
+	}
+	ImGui::SameLine();
+	if (ImGui::Button("Top")) {
+		camera_rotation = {M_PI/2, 0.0f, 0.0f};
+	}
+
+	ImGui::SliderFloat("Camera X", &camera_rotation.x, -M_PI/2+M_PI/1000, M_PI/2-M_PI/1000);
+	ImGui::SliderFloat("Camera Y", &camera_rotation.y, -M_PI, M_PI);
+	ImGui::SliderFloat("Distance", &camera_distance, 1.0f, 2.0f);
+
 	ImGui::End();
 
 	// NOTE: Animation code and other runtime variable updates go here
 	if (model_spin) {
 		model_rotation = float(time);
+	}
+
+	if (scale_animation) {
+    scale_factor = 1.0f + 0.3f * sinf(float(time) * 2.0f); 
 	}
 
 	model_rotation = fmodf(model_rotation, 2.0f * M_PI);
@@ -562,9 +703,10 @@ void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
 				float(veekay::app.window_width) / float(veekay::app.window_height),
 				camera_near_plane, camera_far_plane),
 
-			.transform = multiply(rotation({0.0f, 1.0f, 0.0f}, model_rotation),
-			                      translation(model_position)),
-
+			.transform = multiply(camera_view(camera_rotation, camera_distance),
+											multiply(scale({scale_factor, scale_factor, scale_factor}),
+			                      				translation(model_position))),
+	
 			.color = model_color,
 		};
 
@@ -574,7 +716,7 @@ void render(VkCommandBuffer cmd, VkFramebuffer framebuffer) {
 		                   0, sizeof(ShaderConstants), &constants);
 
 		// NOTE: Draw 6 indices (3 vertices * 2 triangles), 1 group, no offsets
-		vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
+		vkCmdDrawIndexed(cmd, sphere_index_count, 1, 0, 0, 0);
 	}
 
 	vkCmdEndRenderPass(cmd);
